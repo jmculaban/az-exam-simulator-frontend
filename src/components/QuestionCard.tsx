@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Question } from "../types/exam";
 import { markVisited, saveAnswer, toggleFlag } from "../api/examApi";
 import { CSS } from "@dnd-kit/utilities";
-import { closestCenter, DndContext, type DragEndEvent } from "@dnd-kit/core";
+import { closestCenter, DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 
 interface Props {
@@ -12,19 +12,14 @@ interface Props {
   onFlag: (id: string) => void;
 }
 
-// Drage item component
-function SortableItem({
-  id,
-  text
-}: {
-  id: string;
-  text: string;
-}) {
+// Sortable item component
+function SortableItem({ id, text}: { id: string; text: string; }) {
   const {attributes, listeners, setNodeRef, transform, transition} = 
     useSortable({id});
+  
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition
+    transition  
   };
 
   return (
@@ -33,10 +28,42 @@ function SortableItem({
       style={style}
       {...attributes}
       {...listeners}
-      className="flex items-center justify-between p-3 mb-2 border rounded bg-white cursor-move"
+      className="w-full"
     >
-      <span>{text}</span>
-      <span className="text-gray-400">≡</span>
+      {text}
+    </div>
+  );
+}
+
+// Drag item component
+function DraggableItem({ id, text }: { id: string; text: string; }) {
+  const { attributes, listeners, setNodeRef, transform } = 
+    useDraggable({ id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...listeners}
+      {...attributes}
+      className="border p-2 mb-2 bg-white cursor-move rounded"
+    >
+      {text}
+    </div>
+  );
+}
+
+// Droppable container component
+function Droppable({ id, children }: any) {
+  const { setNodeRef } = useDroppable({ id });
+
+  return (
+    <div ref={setNodeRef}>
+      {children}
     </div>
   )
 }
@@ -177,28 +204,111 @@ export default function QuestionCard({
 
   // ORDERING
   const renderOrdering = () => {
-    const list: string[] = answer || question.options || [];
+    const sensors = useSensors(useSensor(PointerSensor));
+
+    const [activeId, setActiveId] = useState<string | null>(null);
+
+    const allOptions = question.options || [];
+    const selected: (string | null)[] =
+      answer || Array(allOptions.length).fill(null);
+
+    const available = allOptions.filter(opt => !selected.includes(opt));
 
     const handleDragEnd = (event: DragEndEvent) => {
       const { active, over } = event;
+      if (!over) return;
 
-      if (!over || active.id === over.id) return;
+      const activeId = active.id as string;
+      const overId = over.id as string;
 
-      const oldIndex = list.indexOf(active.id as string);
-      const newIndex = list.indexOf(over.id as string);
+      let updated = [...selected];
 
-      const newList = arrayMove(list, oldIndex, newIndex);
+      // Left -> Right
+      if (available.includes(activeId) && overId.startsWith("slot-")) {
+        const index = Number(overId.split("-")[1]);
+        updated[index] = activeId;
+        handleSave(updated.filter(Boolean));
+        return;
+      }
 
-      handleSave(newList);
+      // Right -> Left
+      if (selected.includes(activeId) && overId === "actions") {
+        updated = updated.map(i => (i === activeId ? null : i));
+        handleSave(updated.filter(Boolean));
+        return;
+      }
+
+      // Reorder inside RIGHT
+      if (selected.includes(activeId) && overId.startsWith("slot-")) {
+        const from = selected.indexOf(activeId);
+        const to = Number(overId.split("-")[1]);
+
+        updated[from] = null;
+        updated[to] = activeId;
+
+        handleSave(updated.filter(Boolean));
+      }
     };
 
     return (
-      <DndContext collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={list} strategy={verticalListSortingStrategy}>
-          {list.map((item) => (
-            <SortableItem key={item} id={item} text={item} />
-          ))}
-        </SortableContext>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={pointerWithin}
+        onDragStart={(e) => setActiveId(e.active.id as string)}
+        onDragEnd={(e) => {
+          handleDragEnd(e);
+          setActiveId(null);
+        }}
+        onDragCancel={() => setActiveId(null)}
+      >
+        <div className="grid grid-cols-2 gap-8 mt-4">
+
+          {/* LEFT: ACTIONS */}
+          <div>
+            <div className="font-semibold mb-2">Actions</div>
+
+            <Droppable id="actions">
+              <div className="border p-3 bg-gray-50 min-h-[300px] rounded">
+                {available.map(item => (
+                  <DraggableItem key={item} id={item} text={item} />
+                ))}
+              </div>
+            </Droppable>
+          </div>
+
+          {/* RIGHT: SELECTED */}
+          <div>
+            <div className="font-semibold mb-2">Answer Area</div>
+
+            <div className="border p-3 bg-gray-100 min-h-[300px] rounded flex flex-col gap-2">
+              {Array.from({ length: allOptions.length }).map((_, index) => {
+                const item = selected[index];
+
+                return (
+                  <Droppable key={index} id={`slot-${index}`}>
+                    <div className="h-14 border-2 border-dashed border-gray-300 rounded flex items-center px-2 bg-white hover: border-blue-400 transition">
+                      {item ? (
+                        <SortableItem id={item} text={item} />
+                      ) : (
+                        <span className="text-gray-400 text-sm">
+                          Drop here
+                        </span>
+                      )}
+                    </div>
+                  </Droppable>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+
+        <DragOverlay>
+          {activeId ? (
+            <div className="px-3 py-1 bg-white border shadow text-sm">
+              {activeId}
+            </div>
+          ) : null}
+        </DragOverlay>
       </DndContext>
     );
   };

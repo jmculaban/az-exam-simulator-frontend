@@ -12,11 +12,6 @@ export default function ExamPage() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
 
-  // Progress
-  const totalQuestions = questions.length;
-  const answeredCount = questions.filter(q => q.isAnswered).length;
-  const progressPercent = totalQuestions ? Math.round((answeredCount / totalQuestions) * 100) : 0;
-
   // Load exam
   useEffect(() => {
     if (!sessionId) return;
@@ -49,13 +44,6 @@ export default function ExamPage() {
     return () => clearInterval(interval);
   }, [timeLeft]);
 
-  // Derived
-  const currentQuestion = questions[currentIndex];
-
-  if (!data || !questions.length) {
-    return <div className="p-6">Loading...</div>;
-  }
-
   // Format timer
   const formatTime = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -69,7 +57,6 @@ export default function ExamPage() {
     if (typeof answer === "string") return answer.trim() === "";
     if (Array.isArray(answer)) return answer.length === 0;
     if (typeof answer === "object") return Object.keys(answer).length === 0;
-
     return false;
   };
 
@@ -98,22 +85,50 @@ export default function ExamPage() {
     );
   };
 
+  // Derived
+  const currentQuestion = questions[currentIndex];
+
+  // Progress
+  const totalQuestions = questions.length;
+  const answeredCount = questions.filter(q => q.isAnswered).length;
+  const progressPercent = totalQuestions ? Math.round((answeredCount / totalQuestions) * 100) : 0;
+
+  if (!data || !questions.length) {
+    return <div className="p-6">Loading...</div>;
+  }
+
   return (
-    <div className="flex h-screen bg-[#f3f2f1]">
+    <div className="flex h-screen bg-[#f3f2f1] text-black">
 
-      {/* LEFT SIDEBAR */}
-      <div className="w-64 bg-white border-r p-4 overflow-auto">
+      {/* LEFT PALETTE */}
+      <div className="w-72 bg-white border-r flex flex-col">
 
-        <div className="grid grid-cols-5 gap-2">
+        {/* PROGRESS */}
+        <div className="p-4 border-b">
+          <div className="text-sm font-semibold mb-2">
+            {answeredCount} of {totalQuestions} answered
+          </div>
+
+          <div className="w-full bg-gray-200 h-2 rounded">
+            <div
+              className="bg-[#0078d4] h-2 rounded"
+              style={{ width: `${progressPercent}%` }}
+            />
+          </div>
+        </div>
+
+        {/* QUESTION GRID */}
+        <div className="p-4 grid grid-cols-5 gap-2 overflow-auto">
           {questions.map((q, index) => (
             <button
               key={q.id}
               onClick={() => setCurrentIndex(index)}
               className={`
-                h-10 text-sm border rounded  
-                ${index === currentIndex ? "bg-blue-600 text-white" : "bg-gray-200"}
+                h-10 text-sm border rounded
+                flex items-center justify-center
+                ${index === currentIndex ? "bg-[#0078d4] text-white" : "bg-gray-100"}  
                 ${q.isAnswered ? "bg-green-500 text-white" : ""}
-                ${q.isFlagged ? "border-yellow-400 border-2" : ""}
+                ${q.isFlagged ? "border-yellow-500 border-2" : ""}
                 cursor-pointer
               `}
             >
@@ -123,83 +138,85 @@ export default function ExamPage() {
         </div>
 
         {/* LEGEND */}
-        <div className="mt-6 text-xs space-y-2">
+        <div className="p-4 border-t text-xs space-y-2">
           <div>
-            <span className="inline-block w-3 h-3 bg-gray-300 mr-2"/> 
+            <span className="inline-block w-3 h-3 bg-gray-300 mr-2" />
             Not answered
           </div>
           <div>
-            <span className="inline-block w-3 h-3 bg-green-500 mr-2"/> 
+            <span className="inline-block w-3 h-3 bg-green-500 mr-2" />
             Answered
           </div>
           <div>
-            <span className="inline-block w-3 h-3 border-2 border-yellow-400 mr-2"/> 
-            Flagged
+            <span className="inline-block w-3 h-3 border-2 border-yellow-400 mr-2" />
+            Marked for review
           </div>
         </div>
       </div>
 
-      {/* RIGHT MAIN CONTENT */}
+      {/* MAIN CONTENT */}
       <div className="flex-1 flex flex-col">
 
         {/* HEADER */}
-        <div className="px-6 py-3 bg-white border-b">
-          
-          {/* TOP ROW */}
+        <div className="flex justify-between items-center px-6 py-3 bg-white border-b">
           <div className="font-semibold">
-            Question {currentIndex + 1}
+            Question {currentIndex + 1} of {totalQuestions}
           </div>
 
           <div className="text-sm text-gray-600">
             ⏱ {formatTime(timeLeft)}
           </div>
-
-          {/* PROGRESS BAR */}
-          <div>
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
-              <span>Progress ({answeredCount}/{totalQuestions})</span>
-              <span>{progressPercent}%</span>
-            </div>
-
-            <div className="w-full h-2 bg-gray-200 rounded">
-              <div
-                className="h-2 bg-[#2f4f6f] rounded transition-all"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-          </div>
         </div>
 
-        {/* QUESTION AREA */}
+        {/* QUESTION */}
         <div className="flex-1 p-6 overflow-auto">
-          <div className="bg-white border p-6 rounded">
-            <QuestionCard 
-              key={currentQuestion.id}
-              question={currentQuestion}
-              sessionId={data.sessionId}
-              onAnswer={handleAnswerChange}
-              onFlag={handleFlagChange}
-            />
+          <div className="bg-white border rounded p-6 shadow-sm">
+            {currentQuestion && (
+              <QuestionCard 
+                key={currentQuestion.id}
+                question={currentQuestion}
+                sessionId={data.sessionId}
+                onAnswer={handleAnswerChange}
+                onFlag={handleFlagChange}
+              />
+            )}
           </div>
         </div>
 
-        {/* FOOTER NAV */}
-        <div className="flex justify-between p-4 bg-white border-t">
+        {/* FOOTER */}
+        <div className="flex justify-between items-center p-4 bg-white border-t">
           <button
             disabled={currentIndex === 0}
             onClick={() => setCurrentIndex((prev) => prev - 1)}
-            className="px-6 py-2 bg-[#2f4f6f] text-white rounded disabled:opacity-50 cursor-pointer"
+            className="px-6 py-2 bg-gray-300 rounded disabled:opacity-50 cursor-pointer"
           >
             Previous
           </button>
 
+          <div className="flex gap-2">
+            <button
+              onClick={() => alert("TODO: Review screen")}
+              className="px-4 py-2 border rounded cursor-pointer"
+            >
+              Review
+            </button>
+
+            <button
+              onClick={() => alert("TODO: Submit exam")}
+              className="px-6 py-2 bg-[#d13438] text-white rounded cursor-pointer"
+            >
+              End Exam
+            </button>
+          </div>
+
           <button
-            disabled={currentIndex === questions.length - 1}
+            disabled={currentIndex === totalQuestions - 1}
             onClick={() => setCurrentIndex((prev) => prev + 1)}
             className="px-6 py-2 bg-[#2f4f6f] text-white rounded disabled:opacity-50 cursor-pointer"
           >
             Next
           </button>
+
         </div>
       </div>
     </div>
