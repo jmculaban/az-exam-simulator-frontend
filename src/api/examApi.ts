@@ -1,5 +1,5 @@
 import axios from "axios";
-import type { ResumeExamResponse, ExamResult } from "../types/exam";
+import type { ResumeExamResponse, ExamResult, SectionReviewResponse } from "../types/exam";
 
 const API = axios.create({
   baseURL: "http://localhost:8081/api",
@@ -36,3 +36,6 @@ export const toggleFlag = (
 
 export const markVisited = (sessionId: string, questionId: string) =>
   API.post(`/exam-state/${sessionId}/${questionId}/visit`);
+
+export const getSectionReview = (sessionId: string) =>
+  API.get<SectionReviewResponse>(`/exams/${sessionId}/section-review`);

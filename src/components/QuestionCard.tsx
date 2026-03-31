@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import type { Question } from "../types/exam";
 import { markVisited, saveAnswer, toggleFlag } from "../api/examApi";
 import { CSS } from "@dnd-kit/utilities";
-import { closestCenter, DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent } from "@dnd-kit/core";
-import { arrayMove, SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { DndContext, DragOverlay, PointerSensor, pointerWithin, useDraggable, useDroppable, useSensor, useSensors, type DragEndEvent, type DragOverEvent } from "@dnd-kit/core";
+import { useSortable } from "@dnd-kit/sortable";
 
 interface Props {
   question: Question;
@@ -14,12 +14,13 @@ interface Props {
 
 // Sortable item component
 function SortableItem({ id, text}: { id: string; text: string; }) {
-  const {attributes, listeners, setNodeRef, transform, transition} = 
+  const {attributes, listeners, setNodeRef, transform, transition, isDragging} = 
     useSortable({id});
   
   const style = {
     transform: CSS.Transform.toString(transform),
-    transition  
+    transition,
+    opacity: isDragging ? 0 : 1,
   };
 
   return (
@@ -28,20 +29,22 @@ function SortableItem({ id, text}: { id: string; text: string; }) {
       style={style}
       {...attributes}
       {...listeners}
-      className="w-full"
+      className="flex items-center gap-3 w-full h-full px-3 border border-[#9fb1c9] bg-white text-[14px] cursor-grab select-none"
     >
-      {text}
+      <span className="text-[#55708f] text-sm select-none">::</span>
+      <span className="truncate text-[14px] text-[#1f1f1f]">{text}</span>
     </div>
   );
 }
 
 // Drag item component
 function DraggableItem({ id, text }: { id: string; text: string; }) {
-  const { attributes, listeners, setNodeRef, transform } = 
+  const { attributes, listeners, setNodeRef, transform, isDragging } = 
     useDraggable({ id });
 
   const style = {
     transform: CSS.Transform.toString(transform),
+    opacity: isDragging ? 0 : 1,
   };
 
   return (
@@ -50,9 +53,10 @@ function DraggableItem({ id, text }: { id: string; text: string; }) {
       style={style}
       {...listeners}
       {...attributes}
-      className="border p-2 mb-2 bg-white cursor-move rounded"
+      className="flex items-center gap-3 px-3 h-11 mb-2 border border-[#9fb1c9] bg-white text-[14px] cursor-grab select-none"
     >
-      {text}
+      <span className="text-[#55708f] text-sm select-none">::</span>
+      <span className="truncate text-[14px] text-[#1f1f1f]">{text}</span>
     </div>
   );
 }
@@ -88,14 +92,6 @@ export default function QuestionCard({
     hasMarked.current = true;
     markVisited(sessionId, question.id);
   }, [sessionId, question.id]);
-
-  const isEmptyAnswer = (value: any) => {
-    if (value == null) return true;
-    if (typeof value === "string") return value.trim() === "";
-    if (Array.isArray(value)) return value.length === 0;
-    if (typeof value === "object") return Object.keys(value).length === 0;
-    return false;
-  };
 
   // Save and sync parent
   const handleSave = async (newAnswer: any) => {
@@ -138,13 +134,14 @@ export default function QuestionCard({
     question.options?.map((opt, idx) => (
       <label
         key={`${question.id}-${opt}`}
-        className="flex items-center gap-2 mb-2"
+        className="flex items-center gap-2.5 mb-2.5 text-[14px] text-[#1f1f1f]"
       >
         <input
           type="radio"
           name={question.id}
           checked={answer === opt}
           onChange={() => handleSave(opt)}
+          className="w-[15px] h-[15px] accent-[#2d4e73]"
         />
         <span>{String.fromCharCode(65 + idx)}. {opt}</span>
       </label>
@@ -157,11 +154,12 @@ export default function QuestionCard({
     return question.options?.map((opt, idx) => (
       <label
         key={`${question.id}-${opt}`}
-        className="flex items-center gap-2 mb-2"
+        className="flex items-center gap-2.5 mb-2.5 text-[14px] text-[#1f1f1f]"
       >
         <input 
           type="checkbox"
           checked={selected.includes(opt)}
+          className="w-[15px] h-[15px] accent-[#2d4e73]"
           onChange={() => {
             const updated = selected.includes(opt)
               ? selected.filter((o) => o !== opt)
@@ -177,17 +175,18 @@ export default function QuestionCard({
   // MATCHING
   const renderMatching = () => {
     const map: Record<string, string> = answer || {};
+    const allChoices = question.options || [];
 
     return Object.entries(question.optionMap || {}).map(
       ([key, label]) => (
         <div 
           key={`${question.id}-${key}`} 
-          className="flex items-center justify-between border p-3 rounded mb-2"
+          className="flex items-center justify-between border border-[#7f7f7f] px-3 py-2.5 mb-2 bg-white"
         >
-          <span className="w-1/2">{label}</span>
+          <span className="w-1/2 text-[14px] text-[#1f1f1f]">{label}</span>
 
-          <input
-            className="border p-1 rounded w-1/2"
+          <select
+            className="h-8 border border-[#7a7a7a] px-2 w-1/2 bg-[#fbfbfb] text-[14px] text-[#1f1f1f]"
             value={map[key] || ""}
             onChange={(e) => {
               const updated = {
@@ -196,7 +195,14 @@ export default function QuestionCard({
               };
               handleSave(updated);
             }}
-          />
+          >
+            <option value="" aria-label="No selection" />
+            {allChoices.map((choice) => (
+              <option key={`${key}-${choice}`} value={choice}>
+                {choice}
+              </option>
+            ))}
+          </select>
         </div>
       )
     );
@@ -207,12 +213,43 @@ export default function QuestionCard({
     const sensors = useSensors(useSensor(PointerSensor));
 
     const [activeId, setActiveId] = useState<string | null>(null);
+    const [overId, setOverId] = useState<string | null>(null);
 
     const allOptions = question.options || [];
-    const selected: (string | null)[] =
-      answer || Array(allOptions.length).fill(null);
+    const normalizedAnswer: (string | null)[] = Array.isArray(answer) ? answer : [];
+    const selected: (string | null)[] = Array(allOptions.length).fill(null);
+
+    normalizedAnswer.forEach((item, index) => {
+      if (index < selected.length && typeof item === "string" && allOptions.includes(item)) {
+        selected[index] = item;
+      }
+    });
 
     const available = allOptions.filter(opt => !selected.includes(opt));
+
+    const placeAtSlot = (
+      slots: (string | null)[],
+      value: string,
+      slotIndex: number
+    ) => {
+      const safeIndex = Math.max(0, Math.min(slotIndex, allOptions.length - 1));
+      const updated = [...slots];
+
+      const fromIndex = updated.indexOf(value);
+      if (fromIndex >= 0) {
+        updated[fromIndex] = null;
+      }
+
+      const displaced = updated[safeIndex];
+      updated[safeIndex] = value;
+
+      // Swap when dragging one selected item onto another selected slot.
+      if (fromIndex >= 0 && displaced && fromIndex !== safeIndex) {
+        updated[fromIndex] = displaced;
+      }
+
+      return updated;
+    };
 
     const handleDragEnd = (event: DragEndEvent) => {
       const { active, over } = event;
@@ -221,33 +258,44 @@ export default function QuestionCard({
       const activeId = active.id as string;
       const overId = over.id as string;
 
-      let updated = [...selected];
+      const getDropIndex = () => {
+        if (overId.startsWith("slot-")) {
+          return Number(overId.split("-")[1]);
+        }
+
+        const itemIndex = selected.indexOf(overId);
+        if (itemIndex >= 0) {
+          return itemIndex;
+        }
+
+        return null;
+      };
+
+      const dropIndex = getDropIndex();
 
       // Left -> Right
-      if (available.includes(activeId) && overId.startsWith("slot-")) {
-        const index = Number(overId.split("-")[1]);
-        updated[index] = activeId;
-        handleSave(updated.filter(Boolean));
+      if (available.includes(activeId) && dropIndex !== null) {
+        const updated = placeAtSlot(selected, activeId, dropIndex);
+        handleSave(updated);
         return;
       }
 
       // Right -> Left
       if (selected.includes(activeId) && overId === "actions") {
-        updated = updated.map(i => (i === activeId ? null : i));
-        handleSave(updated.filter(Boolean));
+        const updated = selected.map((item) => (item === activeId ? null : item));
+        handleSave(updated);
         return;
       }
 
       // Reorder inside RIGHT
-      if (selected.includes(activeId) && overId.startsWith("slot-")) {
-        const from = selected.indexOf(activeId);
-        const to = Number(overId.split("-")[1]);
-
-        updated[from] = null;
-        updated[to] = activeId;
-
-        handleSave(updated.filter(Boolean));
+      if (selected.includes(activeId) && dropIndex !== null) {
+        const updated = placeAtSlot(selected, activeId, dropIndex);
+        handleSave(updated);
       }
+    };
+
+    const handleDragOver = (event: DragOverEvent) => {
+      setOverId((event.over?.id as string) || null);
     };
 
     return (
@@ -255,20 +303,25 @@ export default function QuestionCard({
         sensors={sensors}
         collisionDetection={pointerWithin}
         onDragStart={(e) => setActiveId(e.active.id as string)}
+        onDragOver={handleDragOver}
         onDragEnd={(e) => {
           handleDragEnd(e);
           setActiveId(null);
+          setOverId(null);
         }}
-        onDragCancel={() => setActiveId(null)}
+        onDragCancel={() => {
+          setActiveId(null);
+          setOverId(null);
+        }}
       >
-        <div className="grid grid-cols-2 gap-8 mt-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5 mt-2">
 
           {/* LEFT: ACTIONS */}
           <div>
-            <div className="font-semibold mb-2">Actions</div>
+            <div className="font-semibold text-[15px] leading-none mb-2.5 text-[#1f1f1f]">Actions</div>
 
             <Droppable id="actions">
-              <div className="border p-3 bg-gray-50 min-h-[300px] rounded">
+              <div className="border border-[#a5b6cc] p-2.5 bg-[#fcfdff] min-h-[300px]">
                 {available.map(item => (
                   <DraggableItem key={item} id={item} text={item} />
                 ))}
@@ -278,19 +331,27 @@ export default function QuestionCard({
 
           {/* RIGHT: SELECTED */}
           <div>
-            <div className="font-semibold mb-2">Answer Area</div>
+            <div className="font-semibold text-[15px] leading-none mb-2.5 text-[#1f1f1f]">Answer Area</div>
 
-            <div className="border p-3 bg-gray-100 min-h-[300px] rounded flex flex-col gap-2">
+            <div className="border border-[#a5b6cc] p-2.5 bg-[#fcfdff] min-h-[300px] flex flex-col gap-2">
               {Array.from({ length: allOptions.length }).map((_, index) => {
                 const item = selected[index];
+                const slotId = `slot-${index}`;
+                const isHoverTarget = overId === slotId || (item !== null && overId === item);
 
                 return (
-                  <Droppable key={index} id={`slot-${index}`}>
-                    <div className="h-14 border-2 border-dashed border-gray-300 rounded flex items-center px-2 bg-white hover: border-blue-400 transition">
+                  <Droppable key={index} id={slotId}>
+                    <div
+                      className={`h-11 border border-dashed flex items-center transition-colors ${
+                        isHoverTarget
+                          ? "border-[#2d76d2] bg-[#eaf3ff]"
+                          : "border-[#c0ccdc] bg-white"
+                      }`}
+                    >
                       {item ? (
                         <SortableItem id={item} text={item} />
                       ) : (
-                        <span className="text-gray-400 text-sm">
+                        <span className="text-[#8ea0b7] text-[14px] px-3 w-full">
                           Drop here
                         </span>
                       )}
@@ -304,8 +365,9 @@ export default function QuestionCard({
 
         <DragOverlay>
           {activeId ? (
-            <div className="px-3 py-1 bg-white border shadow text-sm">
-              {activeId}
+            <div className="flex items-center gap-3 h-11 px-3 bg-white border border-[#99aac4] shadow text-[14px]">
+              <span className="text-[#55708f] text-sm select-none">::</span>
+              <span className="text-[14px]">{activeId}</span>
             </div>
           ) : null}
         </DragOverlay>
@@ -330,9 +392,9 @@ export default function QuestionCard({
   };
 
   return (
-    <div>
+    <div className="text-[#1f1f1f] px-1">
       {/* QUESTION */}
-      <div className="mb-4 text-base font-medium">
+      <div className="mb-5 text-[18px] font-normal text-left leading-6">
         {question.text}
       </div>
 
@@ -340,13 +402,43 @@ export default function QuestionCard({
       <div className="mb-6">{renderByType()}</div>
 
       {/* ACTION BAR */}
-      <div className="flex justify-between border-t pt-3 text-sm">
-        <div className="flex gap-4">
-          <button onClick={handleFlag} className="text-blue-600 cursor-pointer">
-            {question.isFlagged ? "Unflag" : "Mark for review"}
-          </button>
+      <div className="flex justify-between border-t border-[#b4b4b4] pt-3 text-[13px]">
+        <div className="flex items-center gap-4">
+          <label className="inline-flex items-center gap-2 text-[13px] text-[#1f1f1f] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={question.isFlagged}
+              onChange={handleFlag}
+              className="w-[15px] h-[15px] accent-[#2d4e73]"
+            />
+            Mark for review
+          </label>
 
-          <button onClick={handleReset} className="text-red-600 cursor-pointer">
+          <button
+            onClick={handleReset}
+            className="h-8 px-4 bg-[#6f6f72] text-white border border-[#626266] rounded-full cursor-pointer text-[13px] leading-none inline-flex items-center gap-2 transition-colors hover:bg-white hover:text-[#4a4a4a] hover:border-[#808080] active:bg-[#ececec]"
+          >
+            <svg
+              viewBox="0 0 16 16"
+              className="w-[13px] h-[13px]"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                d="M2.5 8a5.5 5.5 0 1 0 1.9-4.15"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+              />
+              <path
+                d="M2.5 2.75v3.1h3.1"
+                stroke="currentColor"
+                strokeWidth="1.7"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
             Reset Answer
           </button>
         </div>

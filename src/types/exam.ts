@@ -28,6 +28,7 @@ export interface Section {
 export interface ResumeExamResponse {
   sessionId: string;
   examCode: string;
+  description: string;
   status: string;
   
   timer: ExamTimer;
@@ -96,4 +97,26 @@ export interface ReviewExamResponse {
   total: number;
   passed: boolean;
   sections: ReviewSection[];
+}
+
+export interface QuestionReviewItem {
+  id: string;
+  text: string;
+  answered: boolean;
+  flagged: boolean;
+}
+
+export interface SectionReviewItem {
+  id: string;
+  title: string;
+  questions: QuestionReviewItem[];
+}
+
+export interface SectionReviewResponse {
+  sessionId: string;
+  examCode: string;
+  description: string;
+  timer: ExamTimer;
+  navigation: Navigation;
+  sections: SectionReviewItem[];
 }
