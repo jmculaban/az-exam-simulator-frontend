@@ -10,6 +10,7 @@ interface Props {
   sessionId: string;
   onAnswer: (id: string, answer: any) => void;
   onFlag: (id: string) => void;
+  onSavingChange?: (saving: boolean) => void;
 }
 
 // Sortable item component
@@ -77,6 +78,7 @@ export default function QuestionCard({
   sessionId,
   onAnswer,
   onFlag,
+  onSavingChange,
 }: Props) {
   const [answer, setAnswer] = useState<any>(question.userAnswer);
   const hasMarked = useRef(false);
@@ -98,11 +100,16 @@ export default function QuestionCard({
     setAnswer(newAnswer);
     onAnswer(question.id, newAnswer);
 
-    await saveAnswer({
-      sessionId,
-      questionId: question.id,
-      answer: newAnswer,
-    });
+    onSavingChange?.(true);
+    try {
+      await saveAnswer({
+        sessionId,
+        questionId: question.id,
+        answer: newAnswer,
+      });
+    } finally {
+      onSavingChange?.(false);
+    }
   };
 
   // Toggle flag
@@ -122,11 +129,16 @@ export default function QuestionCard({
     setAnswer(empty);
     onAnswer(question.id, empty);
 
-    await saveAnswer({
-      sessionId,
-      questionId: question.id,
-      answer: empty,
-    });
+    onSavingChange?.(true);
+    try {
+      await saveAnswer({
+        sessionId,
+        questionId: question.id,
+        answer: empty,
+      });
+    } finally {
+      onSavingChange?.(false);
+    }
   }
 
   // SINGLE CHOICE
@@ -177,34 +189,51 @@ export default function QuestionCard({
     const map: Record<string, string> = answer || {};
     const allChoices = question.options || [];
 
-    return Object.entries(question.optionMap || {}).map(
-      ([key, label]) => (
-        <div 
-          key={`${question.id}-${key}`} 
-          className="flex items-center justify-between border border-[#7f7f7f] px-3 py-2.5 mb-2 bg-white"
-        >
-          <span className="w-1/2 text-[14px] text-[#1f1f1f]">{label}</span>
+    const toLabel = (value: string) =>
+      value
+        .replace(/[-_]/g, " ")
+        .replace(/\b\w/g, (char) => char.toUpperCase());
 
-          <select
-            className="h-8 border border-[#7a7a7a] px-2 w-1/2 bg-[#fbfbfb] text-[14px] text-[#1f1f1f]"
-            value={map[key] || ""}
-            onChange={(e) => {
-              const updated = {
-                ...map,
-                [key]: e.target.value,
-              };
-              handleSave(updated);
-            }}
+    return Object.entries(question.optionMap || {}).map(
+      ([key, label]) => {
+        const selected = map[key] || "";
+
+        return (
+          <div
+            key={`${question.id}-${key}`}
+            className="flex flex-wrap md:flex-nowrap items-center gap-3 border border-[#d3d8df] rounded-[8px] px-3 py-3 mb-2.5 bg-[#fcfdff]"
           >
-            <option value="" aria-label="No selection" />
-            {allChoices.map((choice) => (
-              <option key={`${key}-${choice}`} value={choice}>
-                {choice}
-              </option>
-            ))}
-          </select>
-        </div>
-      )
+            <div className="w-full md:w-[420px] min-w-[220px]">
+              <div className="text-[11px] tracking-[0.06em] uppercase font-semibold text-[#5a6f88] mb-1">
+                Service
+              </div>
+              <div className="text-[14px] text-[#1f1f1f] leading-5">{label}</div>
+            </div>
+
+            <div className="w-[220px] md:w-[240px]">
+              <select
+                id={`${question.id}-${key}`}
+                className="h-10 border border-[#b8c4d2] rounded-[6px] px-2.5 w-full bg-white text-[14px] text-[#1f1f1f] focus:outline-none focus:border-[#2d4e73] focus:ring-1 focus:ring-[#2d4e73]"
+                value={selected}
+                onChange={(e) => {
+                  const updated = {
+                    ...map,
+                    [key]: e.target.value,
+                  };
+                  handleSave(updated);
+                }}
+              >
+                <option value="" />
+                {allChoices.map((choice) => (
+                  <option key={`${key}-${choice}`} value={choice}>
+                    {toLabel(choice)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        );
+      }
     );
   };
 

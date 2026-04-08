@@ -93,8 +93,8 @@ function SectionPerformance({ sections }: { sections: ExamResult["sections"] }) 
 					const color = pct >= 70 ? "#2d4e73" : pct >= 40 ? "#b66b15" : "#b4232f";
 
 					return (
-						<div key={section.sectionId} className="grid grid-cols-[170px_1fr] md:grid-cols-[220px_1fr] items-center gap-2 md:gap-3">
-							<div className="text-[14px] text-[#1f1f1f] truncate">{section.title}</div>
+						<div key={section.sectionId} className="grid grid-cols-[200px_1fr] md:grid-cols-[300px_1fr] items-center gap-2 md:gap-4">
+							<div className="text-[14px] leading-[1.35] text-[#1f1f1f] break-words pr-2">{section.title}</div>
 							<div className="relative h-[20px]">
 								{marks.map((mark) => (
 									<div
@@ -114,7 +114,7 @@ function SectionPerformance({ sections }: { sections: ExamResult["sections"] }) 
 				})}
 			</div>
 
-			<div className="grid grid-cols-[170px_1fr] md:grid-cols-[220px_1fr] mt-1">
+			<div className="grid grid-cols-[200px_1fr] md:grid-cols-[300px_1fr] mt-1">
 				<div />
 				<div className="relative h-[16px] text-[11px] text-[#1f1f1f]">
 					<span className="absolute left-0">0%</span>

@@ -1,5 +1,12 @@
 import axios from "axios";
-import type { ResumeExamResponse, ExamResult, SectionReviewResponse } from "../types/exam";
+import type {
+  ResumeExamResponse,
+  ExamResult,
+  SectionReviewResponse,
+  PageResponse,
+  UserExamHistoryItem,
+  ReviewExamResponse,
+} from "../types/exam";
 
 const API = axios.create({
   baseURL: "http://localhost:8081/api",
@@ -7,6 +14,9 @@ const API = axios.create({
 
 export const startExam = (examCode: string, userId: string) =>
   API.post<{ id: string }>("/exams/start", { examCode, userId });
+
+export const ensureUser = (payload: { id: string; email?: string }) =>
+  API.post<{ id: string; email: string }>("/users", payload);
 
 export const resumeExam = (sessionId: string) =>
   API.get<ResumeExamResponse>(`/exams/${sessionId}/resume`);
@@ -39,3 +49,11 @@ export const markVisited = (sessionId: string, questionId: string) =>
 
 export const getSectionReview = (sessionId: string) =>
   API.get<SectionReviewResponse>(`/exams/${sessionId}/section-review`);
+
+export const getExamHistory = (userId: string, page = 0, size = 20) =>
+  API.get<PageResponse<UserExamHistoryItem>>(`/users/${userId}/exam-history`, {
+    params: { page, size },
+  });
+
+export const getExamReview = (sessionId: string) =>
+  API.get<ReviewExamResponse>(`/exams/${sessionId}/review`);

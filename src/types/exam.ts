@@ -92,11 +92,34 @@ export interface ReviewSection {
 
 export interface ReviewExamResponse {
   sessionId: string;
-  examCode: string;
+  userId?: string;
+  startTime?: string;
+  endTime?: string;
+  score: number;
   correct: number;
   total: number;
   passed: boolean;
   sections: ReviewSection[];
+}
+
+export interface UserExamHistoryItem {
+  sessionId: string;
+  examCode: string;
+  score: number;
+  passed: boolean;
+  submittedAt: string;
+}
+
+export interface PageResponse<T> {
+  content: T[];
+  totalElements: number;
+  totalPages: number;
+  size: number;
+  number: number;
+  first: boolean;
+  last: boolean;
+  numberOfElements: number;
+  empty: boolean;
 }
 
 export interface QuestionReviewItem {

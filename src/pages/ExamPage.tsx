@@ -1,13 +1,72 @@
-import { useEffect, useState } from "react";
-import { useParams, useNavigate, useSearchParams } from "react-router-dom";
-import type { Question, ResumeExamResponse } from "../types/exam";
-import { resumeExam, submitExam } from "../api/examApi";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useParams, useNavigate, useSearchParams } from "react-router-dom";
+import type { Question, ResumeExamResponse, SectionReviewResponse } from "../types/exam";
+import { getResult, resumeExam, submitExam } from "../api/examApi";
 import QuestionCard from "../components/QuestionCard";
+
+type ExamPageLocationState = {
+  examSnapshot?: {
+    data: ResumeExamResponse;
+    questions: Question[];
+    currentIndex: number;
+    timeLeft: number;
+  };
+};
+
+function buildReviewSnapshot(
+  data: ResumeExamResponse,
+  questions: Question[],
+  timeLeft: number,
+): SectionReviewResponse {
+  let questionIndex = 0;
+
+  const sections = data.sections.map((section) => {
+    const nextQuestions = section.questions.map((question) => {
+      const currentQuestion = questions[questionIndex] ?? question;
+      questionIndex += 1;
+
+      return {
+        id: currentQuestion.id,
+        text: currentQuestion.text,
+        answered: currentQuestion.isAnswered,
+        flagged: currentQuestion.isFlagged,
+      };
+    });
+
+    return {
+      id: section.id,
+      title: section.title,
+      questions: nextQuestions,
+    };
+  });
+
+  const answered = questions.filter((question) => question.isAnswered).length;
+  const flagged = questions.filter((question) => question.isFlagged).length;
+
+  return {
+    sessionId: data.sessionId,
+    examCode: data.examCode,
+    description: data.description,
+    timer: {
+      remainingSeconds: timeLeft,
+      expired: timeLeft <= 0,
+    },
+    navigation: {
+      total: questions.length,
+      answered,
+      flagged,
+      notVisited: questions.filter((question) => !question.isVisited).length,
+    },
+    sections,
+  };
+}
 
 export default function ExamPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams] = useSearchParams();
+  const locationState = location.state as ExamPageLocationState | null;
   
   const [data, setData] = useState<ResumeExamResponse | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -16,12 +75,34 @@ export default function ExamPage() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
-  const [timesUpModalOpen, setTimesUpModalOpen] = useState(false);
+  const [autoSubmitPending, setAutoSubmitPending] = useState(false);
+  const [autoSubmitError, setAutoSubmitError] = useState(false);
   const [confirmMessage, setConfirmMessage] = useState("");
+  const [isAnswerSaving, setIsAnswerSaving] = useState(false);
+  const isAnswerSavingRef = useRef(false);
 
   // Load exam
   useEffect(() => {
     if (!sessionId) return;
+
+    const snapshot = locationState?.examSnapshot;
+    if (snapshot && snapshot.data.sessionId === sessionId) {
+      setData(snapshot.data);
+      setQuestions(snapshot.questions);
+      setTimeLeft(snapshot.timeLeft);
+
+      const qParam = searchParams.get("q");
+      if (qParam !== null) {
+        const idx = parseInt(qParam, 10);
+        if (!isNaN(idx) && idx >= 0 && idx < snapshot.questions.length) {
+          setCurrentIndex(idx);
+          return;
+        }
+      }
+
+      setCurrentIndex(snapshot.currentIndex);
+      return;
+    }
       
     resumeExam(sessionId).then((res) => {
       setData(res.data);
@@ -48,7 +129,7 @@ export default function ExamPage() {
         }
       }
     });
-  }, [sessionId]);
+  }, [locationState, searchParams, sessionId]);
 
   // Timer countdown
   useEffect(() => {
@@ -58,7 +139,7 @@ export default function ExamPage() {
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(interval);
-          setTimesUpModalOpen(true);
+          setAutoSubmitPending(true);
           return 0;
         }
         return prev - 1;
@@ -67,6 +148,39 @@ export default function ExamPage() {
 
     return () => clearInterval(interval);
   }, [timeLeft]);
+
+  // When timer expires, backend auto-submit runs in the background.
+  // Poll result endpoint and redirect as soon as result is ready.
+  useEffect(() => {
+    if (!autoSubmitPending || !sessionId) return;
+
+    let cancelled = false;
+
+    const checkResult = async () => {
+      try {
+        await getResult(sessionId);
+        if (!cancelled) {
+          navigate(`/result/${sessionId}`);
+        }
+      } catch {
+        // Result not ready yet; keep polling.
+      }
+    };
+
+    checkResult();
+    const interval = setInterval(checkResult, 3000);
+    const timeout = setTimeout(() => {
+      if (!cancelled) {
+        setAutoSubmitError(true);
+      }
+    }, 90000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [autoSubmitPending, navigate, sessionId]);
 
   // Format timer
   const formatTime = (sec: number) => {
@@ -115,7 +229,7 @@ export default function ExamPage() {
   };
 
   const openSubmitModal = () => {
-    if (!sessionId || submitting) return;
+    if (!sessionId || submitting || autoSubmitPending) return;
 
     const unanswered = questions.filter((q) => !q.isAnswered).length;
     const message = unanswered > 0
@@ -127,7 +241,7 @@ export default function ExamPage() {
   };
 
   const handleSubmitConfirm = async () => {
-    if (!sessionId || submitting) return;
+    if (!sessionId || submitting || isAnswerSavingRef.current) return;
 
     setConfirmModalOpen(false);
     setSubmitting(true);
@@ -143,23 +257,46 @@ export default function ExamPage() {
   // Derived
   const currentQuestion = questions[currentIndex];
 
+  const handleAnswerSavingChange = (saving: boolean) => {
+    isAnswerSavingRef.current = saving;
+    setIsAnswerSaving(saving);
+  };
+
+  const handleReviewNavigation = () => {
+    if (!sessionId || isAnswerSavingRef.current || !data) {
+      return;
+    }
+
+    navigate(`/exam/${sessionId}/review`, {
+      state: {
+        reviewSnapshot: buildReviewSnapshot(data, questions, timeLeft),
+        examSnapshot: {
+          data,
+          questions,
+          currentIndex,
+          timeLeft,
+        },
+      },
+    });
+  };
+
   // Progress
   const totalQuestions = questions.length;
   const answeredCount = questions.filter(q => q.isAnswered).length;
   const progressPercent = totalQuestions ? Math.round((answeredCount / totalQuestions) * 100) : 0;
 
   const getQuestionButtonClass = (index: number, q: Question) => {
-    const base = "h-[34px] w-[34px] text-[14px] border flex items-center justify-center transition-colors leading-none";
+    const base = "relative h-[34px] w-[34px] rounded-[6px] text-[13px] border flex items-center justify-center transition-colors leading-none font-semibold";
 
     if (index === currentIndex) {
-      return `${base} bg-[#0078d4] text-white border-[#0078d4]`;
+      return `${base} bg-[#2d4e73] text-white border-[#2d4e73] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.12)]`;
     }
 
     if (q.isAnswered) {
-      return `${base} bg-[#00c853] text-white border-[#00c853]`;
+      return `${base} bg-[#eaf6ee] text-[#1f6a36] border-[#b9ddc4] hover:bg-[#e1f1e7]`;
     }
 
-    return `${base} bg-white text-[#1f1f1f] border-[#7a7a7a]`;
+    return `${base} bg-[#f8f8f9] text-[#2b2b2b] border-[#cdced2] hover:bg-[#f0f1f3]`;
   };
 
   if (!data || !questions.length) {
@@ -173,7 +310,7 @@ export default function ExamPage() {
       <div className="w-[232px] bg-white border-r border-[#c9c9c9] flex flex-col">
 
         {/* EXAM META */}
-        <div className="px-3 py-3 border-b border-[#d8d8d8]">
+        <div className="h-[96px] px-3 border-b border-[#d8d8d8] flex flex-col justify-center">
           <div className="text-[13px] font-semibold tracking-[0.06em] text-[#2d4e73] uppercase">
             {data.examCode}
           </div>
@@ -197,30 +334,37 @@ export default function ExamPage() {
         </div>
 
         {/* QUESTION GRID */}
-        <div className="px-4 py-3 grid grid-cols-4 gap-2 overflow-auto content-start border-b border-[#d8d8d8]">
-          {questions.map((q, index) => (
-            <button
-              key={q.id}
-              onClick={() => setCurrentIndex(index)}
-              className={`${getQuestionButtonClass(index, q)} ${q.isFlagged ? "ring-2 ring-[#f2c200] ring-inset" : ""} cursor-pointer`}
-            >
-              {index + 1}
-            </button>
-          ))}
+        <div className="px-3 py-3 border-b border-[#d8d8d8]">
+          <div className="rounded-[8px] border border-[#dde0e5] bg-[#f7f8fa] p-3">
+            <div className="grid grid-cols-4 gap-2 max-h-[420px] overflow-auto content-start pr-1">
+              {questions.map((q, index) => (
+                <button
+                  key={q.id}
+                  onClick={() => setCurrentIndex(index)}
+                  className={`${getQuestionButtonClass(index, q)} cursor-pointer`}
+                >
+                  {index + 1}
+                  {q.isFlagged && (
+                    <span className="absolute -top-[3px] -right-[3px] h-[9px] w-[9px] rounded-full bg-[#f2c200] border border-white" />
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         {/* LEGEND */}
         <div className="p-4 text-[12px] space-y-2 text-[#2b2b2b]">
           <div className="flex items-center gap-2">
-            <span className="inline-block w-[11px] h-[11px] bg-[#ececec] border border-[#b9b9b9]" />
+            <span className="inline-block w-[11px] h-[11px] rounded-[2px] bg-[#f8f8f9] border border-[#cdced2]" />
             Not answered
           </div>
           <div className="flex items-center gap-2">
-            <span className="inline-block w-[11px] h-[11px] bg-[#00c853]" />
+            <span className="inline-block w-[11px] h-[11px] rounded-[2px] bg-[#eaf6ee] border border-[#b9ddc4]" />
             Answered
           </div>
           <div className="flex items-center gap-2">
-            <span className="inline-block w-[11px] h-[11px] border border-[#f2c200]" />
+            <span className="inline-block w-[11px] h-[11px] rounded-full bg-[#f2c200]" />
             Marked for review
           </div>
         </div>
@@ -230,8 +374,8 @@ export default function ExamPage() {
       <div className="flex-1 flex flex-col min-w-0">
 
         {/* HEADER */}
-        <div className="flex justify-between items-start px-5 py-3 bg-white border-b border-[#c9c9c9]">
-          <div className="text-[34px] font-semibold leading-none pt-1">
+        <div className="h-[96px] flex justify-between items-center px-5 bg-white border-b border-[#c9c9c9]">
+          <div className="text-[24px] font-semibold leading-none">
             Question {currentIndex + 1}
           </div>
 
@@ -251,6 +395,7 @@ export default function ExamPage() {
                 sessionId={data.sessionId}
                 onAnswer={handleAnswerChange}
                 onFlag={handleFlagChange}
+                onSavingChange={handleAnswerSavingChange}
               />
             )}
           </div>
@@ -278,15 +423,16 @@ export default function ExamPage() {
 
           <div className="flex gap-[6px]">
             <button
-              onClick={() => navigate(`/exam/${sessionId}/review`)}
-              className="min-w-[92px] h-[34px] px-4 bg-white text-[#1f1f1f] border border-[#6f6f6f] cursor-pointer text-[14px] leading-none transition-colors hover:bg-[#f6f6f6]"
+              onClick={handleReviewNavigation}
+              disabled={isAnswerSaving}
+              className="min-w-[92px] h-[34px] px-4 bg-white text-[#1f1f1f] border border-[#6f6f6f] disabled:opacity-50 cursor-pointer text-[14px] leading-none transition-colors hover:bg-[#f6f6f6]"
             >
-              Review
+              {isAnswerSaving ? "Saving..." : "Review"}
             </button>
 
             <button
               onClick={openSubmitModal}
-              disabled={submitting}
+              disabled={submitting || autoSubmitPending || isAnswerSaving}
               className="flex items-center gap-2 h-[34px] px-5 bg-[#2d4e73] text-white border border-[#294568] cursor-pointer text-[14px] font-semibold leading-none disabled:opacity-55 transition-colors hover:bg-[#234162]"
             >
               End Exam
@@ -345,22 +491,34 @@ export default function ExamPage() {
         </div>
       )}
 
-      {timesUpModalOpen && (
+      {autoSubmitPending && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
-          <div className="w-full max-w-[420px] bg-white border border-[#c9c9c9] shadow-lg">
+          <div className="w-full max-w-[460px] bg-white border border-[#c9c9c9] shadow-lg">
             <div className="px-5 py-4 border-b border-[#d7d7d7] text-[18px] font-semibold text-[#1f1f1f]">
               Time Expired
             </div>
             <div className="px-5 py-5 text-[14px] text-[#333] leading-6">
-              Time is up. Please end the exam to see your result.
+              {autoSubmitError
+                ? "Result is taking longer than expected. Auto-submit may still be processing."
+                : "Time is up. Submitting your exam automatically. Please wait..."}
             </div>
-            <div className="px-5 py-4 border-t border-[#d7d7d7] flex justify-end">
-              <button
-                onClick={() => setTimesUpModalOpen(false)}
-                className="h-[34px] px-4 bg-[#2d4e73] text-white border border-[#294568] text-[14px] font-semibold"
-              >
-                OK
-              </button>
+            <div className="px-5 py-4 border-t border-[#d7d7d7] flex justify-end gap-2">
+              {autoSubmitError && (
+                <button
+                  onClick={async () => {
+                    if (!sessionId) return;
+                    try {
+                      await getResult(sessionId);
+                      navigate(`/result/${sessionId}`);
+                    } catch {
+                      // still not ready
+                    }
+                  }}
+                  className="h-[34px] px-4 bg-[#2d4e73] text-white border border-[#294568] text-[14px] font-semibold"
+                >
+                  Check Result Again
+                </button>
+              )}
             </div>
           </div>
         </div>

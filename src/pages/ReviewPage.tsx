@@ -1,13 +1,25 @@
 import { useEffect, useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
-import type { SectionReviewResponse, QuestionReviewItem } from "../types/exam";
-import { getSectionReview, submitExam } from "../api/examApi";
+import { useLocation, useParams, useNavigate } from "react-router-dom";
+import type { QuestionReviewItem, Question, ResumeExamResponse, SectionReviewResponse } from "../types/exam";
+import { getResult, getSectionReview, submitExam } from "../api/examApi";
 
 type FilterType = "all" | "answered" | "unanswered" | "flagged";
+
+type ReviewPageLocationState = {
+  reviewSnapshot?: SectionReviewResponse;
+  examSnapshot?: {
+    data: ResumeExamResponse;
+    questions: Question[];
+    currentIndex: number;
+    timeLeft: number;
+  };
+};
 
 export default function ReviewPage() {
   const { sessionId } = useParams<{ sessionId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const locationState = location.state as ReviewPageLocationState | null;
 
   const [data, setData] = useState<SectionReviewResponse | null>(null);
   const [filter, setFilter] = useState<FilterType>("all");
@@ -16,26 +28,71 @@ export default function ReviewPage() {
   const [submitting, setSubmitting] = useState(false);
   const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [errorModalOpen, setErrorModalOpen] = useState(false);
+  const [autoSubmitPending, setAutoSubmitPending] = useState(false);
+  const [autoSubmitError, setAutoSubmitError] = useState(false);
   const [confirmMessage, setConfirmMessage] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     if (!sessionId) return;
+
+    if (locationState?.reviewSnapshot?.sessionId === sessionId) {
+      setData(locationState.reviewSnapshot);
+      setTimeLeft(locationState.reviewSnapshot.timer.remainingSeconds);
+      return;
+    }
+
     getSectionReview(sessionId).then((res) => {
       setData(res.data);
       setTimeLeft(res.data.timer.remainingSeconds);
     });
-  }, [sessionId]);
+  }, [locationState, sessionId]);
 
   useEffect(() => {
     if (!timeLeft) return;
     const interval = setInterval(() => {
       setTimeLeft((prev) => {
-        if (prev <= 1) { clearInterval(interval); return 0; }
+        if (prev <= 1) {
+          clearInterval(interval);
+          setAutoSubmitPending(true);
+          return 0;
+        }
         return prev - 1;
       });
     }, 1000);
     return () => clearInterval(interval);
   }, [timeLeft]);
+
+  useEffect(() => {
+    if (!autoSubmitPending || !sessionId) return;
+
+    let cancelled = false;
+
+    const checkResult = async () => {
+      try {
+        await getResult(sessionId);
+        if (!cancelled) {
+          navigate(`/result/${sessionId}`);
+        }
+      } catch {
+        // keep polling until scheduler finishes auto-submit
+      }
+    };
+
+    checkResult();
+    const interval = setInterval(checkResult, 3000);
+    const timeout = setTimeout(() => {
+      if (!cancelled) {
+        setAutoSubmitError(true);
+      }
+    }, 90000);
+
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [autoSubmitPending, navigate, sessionId]);
 
   const formatTime = (sec: number) => {
     const h = Math.floor(sec / 3600);
@@ -45,11 +102,20 @@ export default function ReviewPage() {
   };
 
   const handleGoToQuestion = (globalIndex: number) => {
-    navigate(`/exam/${sessionId}?q=${globalIndex}`);
+    navigate(`/exam/${sessionId}?q=${globalIndex}`, {
+      state: locationState?.examSnapshot
+        ? {
+            examSnapshot: {
+              ...locationState.examSnapshot,
+              currentIndex: globalIndex,
+            },
+          }
+        : undefined,
+    });
   };
 
   const openSubmitModal = () => {
-    if (!sessionId || submitting) return;
+    if (!sessionId || submitting || autoSubmitPending) return;
     const unanswered = allQuestions.filter((q) => !q.answered).length;
     const msg = unanswered > 0
       ? `You have ${unanswered} unanswered question(s). Are you sure you want to submit?`
@@ -71,6 +137,19 @@ export default function ReviewPage() {
     }
   };
 
+    const handleRefresh = async () => {
+      if (!sessionId) return;
+      setRefreshing(true);
+      try {
+        const res = await getSectionReview(sessionId);
+        setData(res.data);
+        setTimeLeft(res.data.timer.remainingSeconds);
+      } catch {
+        // Could show an error but silent fail for now
+      } finally {
+        setRefreshing(false);
+      }
+    };
   if (!data) {
     return (
       <div className="flex items-center justify-center h-screen bg-[#efefef] font-[Segoe_UI,Tahoma,sans-serif]">
@@ -100,36 +179,27 @@ export default function ReviewPage() {
     return true;
   });
 
-  // Section progress for top bar (answered/total per section)
-  const sectionProgress = data.sections.map((section) => {
-    const total = section.questions.length;
-    const answered = section.questions.filter((q) => q.answered).length;
-    return { title: section.title, answered, total };
-  });
-
   return (
-    <div className="flex flex-col min-h-screen bg-[#efefef] font-[Segoe_UI,Tahoma,sans-serif] text-[#1f1f1f]">
+    <div className="flex flex-col h-screen overflow-hidden bg-[#efefef] font-[Segoe_UI,Tahoma,sans-serif] text-[#1f1f1f]">
 
       {/* TOP BAR */}
       <div className="bg-white border-b border-[#c9c9c9] px-5 py-2 flex items-center justify-between">
-        {/* Section progress */}
+        {/* Total progress */}
         <div className="flex items-center gap-6">
           <span className="text-[11px] font-semibold tracking-[0.1em] text-[#444] uppercase mr-2">
             PROGRESS
           </span>
-          {sectionProgress.map((sec) => (
-            <div key={sec.title} className="flex flex-col items-center gap-[3px]">
-              <div className="text-[11px] text-[#333] whitespace-nowrap">
-                {sec.title} ({sec.answered}/{sec.total})
-              </div>
-              <div className="w-[120px] h-[6px] bg-[#d7d7d7] rounded">
-                <div
-                  className="h-[6px] bg-[#0078d4] rounded transition-all"
-                  style={{ width: sec.total ? `${Math.round((sec.answered / sec.total) * 100)}%` : "0%" }}
-                />
-              </div>
+          <div className="flex flex-col items-center gap-[3px]">
+            <div className="text-[11px] text-[#333] whitespace-nowrap">
+              Overall ({answeredCount}/{allQuestions.length})
             </div>
-          ))}
+            <div className="w-[200px] h-[6px] bg-[#d7d7d7] rounded">
+              <div
+                className="h-[6px] bg-[#0078d4] rounded transition-all"
+                style={{ width: allQuestions.length ? `${Math.round((answeredCount / allQuestions.length) * 100)}%` : "0%" }}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Timer */}
@@ -144,10 +214,20 @@ export default function ReviewPage() {
       </div>
 
       {/* MAIN */}
-      <div className="flex-1 max-w-5xl w-full mx-auto px-6 py-5">
+      <div className="flex-1 min-h-0 max-w-5xl w-full mx-auto px-6 py-5 flex flex-col overflow-hidden">
 
         {/* Heading */}
-        <h1 className="text-[26px] font-semibold mb-4 leading-tight">Review your answers</h1>
+          <div className="flex items-center justify-between mb-4">
+            <h1 className="text-[26px] font-semibold leading-tight">Review your answers</h1>
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              className="px-3 py-2 bg-[#f9f9f9] text-[#1f1f1f] border border-[#767676] text-[13px] font-semibold rounded cursor-pointer hover:bg-[#f0f0f0] disabled:opacity-50 transition-all"
+              title="Refresh to get latest answers"
+            >
+              {refreshing ? "Refreshing..." : "Refresh"}
+            </button>
+          </div>
 
         {/* Instructions accordion */}
         <div className="border border-[#c9c9c9] bg-[#fefefe] mb-5">
@@ -202,7 +282,7 @@ export default function ReviewPage() {
         </div>
 
         {/* Question table */}
-        <div className="border border-[#c9c9c9] bg-white">
+        <div className="border border-[#c9c9c9] bg-white flex-1 min-h-0 flex flex-col">
           {/* Table header */}
           <div className="grid grid-cols-[40px_1fr_100px_120px_120px] border-b border-[#c9c9c9] bg-[#f3f3f3]">
             <div className="px-3 py-2 text-[12px] font-semibold text-[#444]">#</div>
@@ -214,42 +294,48 @@ export default function ReviewPage() {
             <div className="px-3 py-2 text-[12px] font-semibold text-[#444] text-center">For Review</div>
           </div>
 
-          {filteredQuestions.length === 0 ? (
-            <div className="px-4 py-6 text-[13px] text-[#666] text-center">
-              No questions match the selected filter.
-            </div>
-          ) : (
-            filteredQuestions.map((q) => (
-              <button
-                key={q.id}
-                onClick={() => handleGoToQuestion(q.globalIndex)}
-                className="w-full grid grid-cols-[40px_1fr_100px_120px_120px] border-b border-[#e8e8e8] text-left hover:bg-[#f0f6ff] transition-colors cursor-pointer"
-              >
-                <div className="px-3 py-3 text-[13px] text-[#0078d4] font-semibold self-start">
-                  {q.globalIndex + 1}
-                </div>
-                <div className="px-3 py-3 text-[13px] text-[#0078d4] leading-5 line-clamp-3">
-                  {q.text}
-                </div>
-                <div className="px-3 py-3 flex items-center justify-center">
-                  {q.answered && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
-                </div>
-                <div className="px-3 py-3 flex items-center justify-center">
-                  {!q.answered && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
-                </div>
-                <div className="px-3 py-3 flex items-center justify-center">
-                  {q.flagged && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
-                </div>
-              </button>
-            ))
-          )}
+          <div className="flex-1 min-h-0 overflow-y-auto">
+            {filteredQuestions.length === 0 ? (
+              <div className="px-4 py-6 text-[13px] text-[#666] text-center">
+                No questions match the selected filter.
+              </div>
+            ) : (
+              filteredQuestions.map((q) => (
+                <button
+                  key={q.id}
+                  onClick={() => handleGoToQuestion(q.globalIndex)}
+                  className="w-full grid grid-cols-[40px_1fr_100px_120px_120px] border-b border-[#e8e8e8] text-left hover:bg-[#f0f6ff] transition-colors cursor-pointer"
+                >
+                  <div className="px-3 py-3 text-[13px] text-[#0078d4] font-semibold self-start">
+                    {q.globalIndex + 1}
+                  </div>
+                  <div className="px-3 py-3 text-[13px] text-[#0078d4] leading-5 line-clamp-3">
+                    {q.text}
+                  </div>
+                  <div className="px-3 py-3 flex items-center justify-center">
+                    {q.answered && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
+                  </div>
+                  <div className="px-3 py-3 flex items-center justify-center">
+                    {!q.answered && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
+                  </div>
+                  <div className="px-3 py-3 flex items-center justify-center">
+                    {q.flagged && <span className="text-[16px] text-[#1f1f1f]">✓</span>}
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
         </div>
       </div>
 
       {/* FOOTER */}
       <div className="bg-white border-t border-[#c9c9c9] px-6 py-3 flex items-center justify-between">
         <button
-          onClick={() => navigate(`/exam/${sessionId}`)}
+          onClick={() => navigate(`/exam/${sessionId}`, {
+            state: locationState?.examSnapshot
+              ? { examSnapshot: locationState.examSnapshot }
+              : undefined,
+          })}
           className="min-w-[144px] h-[34px] px-4 bg-[#2d4e73] text-white border border-[#294568] cursor-pointer text-[14px] font-semibold leading-none transition-colors hover:bg-[#234162]"
         >
           &lt; Back to Exam
@@ -257,7 +343,7 @@ export default function ReviewPage() {
 
         <button
           onClick={openSubmitModal}
-          disabled={submitting}
+          disabled={submitting || autoSubmitPending}
           className="flex items-center gap-2 h-[34px] px-5 bg-[#2d4e73] text-white border border-[#294568] cursor-pointer text-[14px] font-semibold leading-none disabled:opacity-50 transition-colors hover:bg-[#234162]"
         >
           End Exam
@@ -308,6 +394,39 @@ export default function ReviewPage() {
               >
                 OK
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {autoSubmitPending && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div className="w-full max-w-[460px] bg-white border border-[#c9c9c9] shadow-lg">
+            <div className="px-5 py-4 border-b border-[#d7d7d7] text-[18px] font-semibold text-[#1f1f1f]">
+              Time Expired
+            </div>
+            <div className="px-5 py-5 text-[14px] text-[#333] leading-6">
+              {autoSubmitError
+                ? "Result is taking longer than expected. Auto-submit may still be processing."
+                : "Time is up. Submitting your exam automatically. Please wait..."}
+            </div>
+            <div className="px-5 py-4 border-t border-[#d7d7d7] flex justify-end gap-2">
+              {autoSubmitError && (
+                <button
+                  onClick={async () => {
+                    if (!sessionId) return;
+                    try {
+                      await getResult(sessionId);
+                      navigate(`/result/${sessionId}`);
+                    } catch {
+                      // still not ready
+                    }
+                  }}
+                  className="h-[34px] px-4 bg-[#2d4e73] text-white border border-[#294568] text-[14px] font-semibold"
+                >
+                  Check Result Again
+                </button>
+              )}
             </div>
           </div>
         </div>
